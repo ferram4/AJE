@@ -25,6 +25,8 @@ namespace AJE
         private double R_c, R_t, R_ab;
 
 
+
+        //-------------------------------------------------------------
         //Pressure and Temperature ratios, including efficiencies
         //These are used to handle the energy added to the flow to create thrust; subscripts indicate sections; Tau indicates temp ratio, Pi indicates pressure ratio.  Eta is for efficiencies
 
@@ -37,8 +39,8 @@ namespace AJE
         //Compressor effects; pi_c is by the power from the turbine or is limited by design, tau_c is directly related to pi_c, eta_c is an efficiency used to relate pi_c to tau_c
         private double pi_c, tau_c, eta_c;
 
-        //Other Compressor; this is the maximum pressure ratio the compressor is capable of
-        private double pi_c_max;
+        //Other Compressor; this is the maximum pressure and temperature ratios the compressor is capable of
+        private double pi_c_max, tau_c_max;
 
         //Burner effects; pi_b is slightly less than 1, tau_b > 1
         private double pi_b, tau_b;
@@ -64,11 +66,20 @@ namespace AJE
         //Other fan; maximum pressure ratio of fan
         private double pi_fc_max;
 
+
+        //-------------------------------------------------------------
         //Important flow variables
         //These are necessary for calculating the thrust and efficiency of the engine
 
-        //The total temperature at the end of the burner and afterburner, respectively; used in calculating tau_lambda and tau_lambda_ab
+        //The max total temperature at the end of the burner and afterburner, respectively; used in calculating tau_lambda and tau_lambda_ab at full throttle
+        private double Tt4_max, Tt7_max;
+
+        //The actual total temperature at the end of the burner and afterburner, respectively
         private double Tt4, Tt7;
+
+        //The total temperature at the end of the compressor and turbine, respectively; used in calculating tau_lambda and tau_lambda_ab at lower throttles
+        private double Tt3, Tt6;
+
 
         //The pressure, temperature, mach number, sound speed and velocity at the exit of the engine nozzle (station 9); used to calculate thrust
         private double P9, T9, M9, a9, U9;
@@ -94,7 +105,9 @@ namespace AJE
         //Mass flow of air through engine
         private double mdot;
 
-        //Engine Geometry
+
+        //-------------------------------------------------------------
+        //Engine Geometry and Data
         //Needed to calculate mass flow and relations between components
 
         //Needed for mass flow calculations
@@ -112,8 +125,26 @@ namespace AJE
         //Ratio of nozzle exit area to nozzle throat area
         private double a_9_rat_astar_8_min, a_9_rat_astar_8_max, a_9_rat_astar_8_actual;
 
+
+        //Other
+        private bool hasAB = false;
+
+        private double mainThrottle = 0;
+        private double abThrottle = 0;
+
+        //The current rotational velocity of the engine
+        private double omega = 0;
+
+        //The peak and idling (zero throttle) rotational velocities of the rotating elements; used to handle spooling up / down
+        private double omega_peak = 0;
+        private double omega_idle = 0;
+
+        //moment of inertia of the rotating elements
+        private double I = 0;
+
         //Must be first initialization function called
-        public void InitializeEngineGeometry(double compressorInletArea, double burnerExitArea, double nozzleThroatArea, double nozzleMinExitArea, double nozzleMaxExitArea, double bypass)
+        public void InitializeEngineGeometry(double compressorInletArea, double burnerExitArea, double nozzleThroatArea, double nozzleMinExitArea, double nozzleMaxExitArea, 
+            double bypass, double peakRPM, double idlingFraction, double rotInertia)
         {
             astar_4_rat_astar_8 = burnerExitArea / nozzleThroatArea;
             a_2_rat_astar_4 = compressorInletArea / burnerExitArea;
@@ -122,6 +153,10 @@ namespace AJE
             A8 = nozzleThroatArea;
             A2 = compressorInletArea;
             bypassRatio = bypass;
+
+            omega_peak = peakRPM * 30 / Math.PI;  //convert RPM to rad/s
+            omega_idle = omega_peak * idlingFraction;
+            I = rotInertia;
         }
 
         //Must be called after InitializeEngineGeometry
@@ -130,6 +165,12 @@ namespace AJE
             pi_d = diffuserPresRatio;
             eta_c = compressorEfficiency;
             pi_c_max = maxCompressorPressureRatio;
+
+            tau_c_max = gamma_c - 1;
+            tau_c_max *= eta_c;
+            tau_c_max /= gamma_c;
+            tau_c_max = Math.Pow(pi_c_max, tau_c_max);
+
             eta_fc = fanEfficiency;
             pi_fc_max = maxFanPressureRatio;
             pi_b = burnerPresRatio;
@@ -141,15 +182,18 @@ namespace AJE
         }
 
         //Must be called after InitializeComponentEfficiencies
-        public void InitializeFuelProperties(double maxBurnerTemp, double maxABTemp, double heatPerUnitMassFuel)
+        public void InitializeFuelProperties(double maxBurnerTemp, double maxABTemp, double heatPerUnitMassFuel, bool hasReheat)
         {
-            Tt4 = maxBurnerTemp;
-            Tt7 = maxABTemp;
+            Tt4_max = maxBurnerTemp;
+            Tt3 = 300;
+            Tt7_max = maxABTemp;
+            Tt6 = 300;
             h_f = heatPerUnitMassFuel;
+            hasAB = hasReheat;
         }
 
         public void CalculatePerformance(double pressure, double temperature, double velocity, double soundspeed, double nozzleExitFrac, double air_density,
-            out double thrust, out double I_sp)
+            double inputThrottle, double timestep, out double thrust, out double I_sp)
         {
             P0 = pressure;
             T0 = temperature;
@@ -161,20 +205,35 @@ namespace AJE
 
             gamma_c = CalculateGamma(T0, 0);
             gamma_t = CalculateGamma(Tt4, f);
-            gamma_ab = CalculateGamma(Tt7, f_ab);
 
             Cp_c = CalculateCp(T0, 0);
             Cp_t = CalculateCp(Tt4, f);
-            Cp_ab = CalculateCp(Tt7, f_ab);
 
             R_c = CalculateR(T0, 0);
             R_t = CalculateR(Tt4, f);
-            R_ab = CalculateR(Tt7, f_ab);
+
+            if (hasAB)
+            {
+                //Set AB at 2/3 throttle
+                mainThrottle = inputThrottle * 0.67;
+                abThrottle = Math.Max(inputThrottle - mainThrottle, 0);
+
+                gamma_ab = CalculateGamma(Tt7, f_ab);
+                Cp_ab = CalculateCp(Tt7, f_ab);
+                R_ab = CalculateR(Tt7, f_ab);
+            }
+            else
+            {
+                mainThrottle = inputThrottle;
+                gamma_ab = gamma_t;
+                Cp_ab = Cp_t;
+                R_ab = R_t;
+            }
 
             CalculateRamProperties();
             CalculateTurbinePropertiesFromNozzleMassBalancing();
             CalculateBurnerProperties();
-            CalculateCompressorAndFanPropertiesFromTurbineEnergyBalance();
+            CalculateCompressorAndFanPropertiesFromTurbineEnergyBalance(timestep);
             CalculateAfterburnerProperties();
 
             CalculateSuctionAreaForMassFlow();
@@ -221,15 +280,19 @@ namespace AJE
             pi_r = Math.Pow(tau_r, tmp);
         }
 
-        public void CalculateCompressorAndFanPropertiesFromTurbineEnergyBalance()
+        public void CalculateCompressorAndFanPropertiesFromTurbineEnergyBalance(double timestep)
         {
-            tau_c = tau_t - 1;
-            tau_c *= -(1 + f) * tau_lambda;
-            tau_c /= tau_r;
-            tau_c++;
-            tau_c /= (bypassRatio + 1);
+            //The heat added by the compressor is directly proportional to its rotation speed; we calculate how this affects engine rotation later on
+            double tau_compAndFan = tau_c = omega / omega_peak * tau_c_max;
 
+            tau_c /= (bypassRatio + 1);     //This divides the energy amoung the compressor and the fan; it is assumed the work they do is proportional
             tau_fc = tau_c * bypassRatio;
+
+            tau_c++;
+            tau_fc++;
+
+            //Set temperature at compressor exit for next frame to handle burner throttling
+            Tt3 = T0 * tau_c * tau_r;
 
             pi_c = pi_fc = gamma_c - 1;
             pi_c *= eta_c;
@@ -239,10 +302,21 @@ namespace AJE
             pi_fc *= eta_fc;
             pi_fc = gamma_c / pi_fc;
             pi_fc = Math.Pow(tau_fc, pi_fc);
+
+            //Calculate changes in engine RPM due to differences in work done by compressor / produced by turbine
+
+            double angularAcceleration = (1 + f) * Cp_t * tau_lambda * (tau_t - 1);         //Work produced by turbine
+            angularAcceleration -= Cp_c * tau_r * (tau_compAndFan - 1);                     //Work used by compressor
+            angularAcceleration /= I * omega;
+            angularAcceleration *= mdot * T0;                                               //Angular acceleration of rotational elements due to energy imbalance between compressor and turbine
+
+            omega += angularAcceleration * timestep;            //update angular velocity
         }
 
         public void CalculateBurnerProperties()
         {
+            Tt4 = Tt3 + (Tt4_max - Tt3) * mainThrottle;
+
             tau_lambda = Tt4 * Cp_t / (T0 * Cp_c);
 
             //Fuel usage is equal to the temperature added by the burner minus the temp added from ram and compression
@@ -259,6 +333,9 @@ namespace AJE
             tau_t /= (gamma_t + 1);
             tau_t = Math.Pow(astar_4_rat_astar_8, tau_t);
 
+            //Set temperature before ab for next frame to handle ab throttling
+            Tt6 = T0 * tau_lambda * tau_t;
+
             pi_t = gamma_t - 1;
             pi_t *= eta_t;
             pi_t = gamma_t / pi_t;
@@ -267,14 +344,21 @@ namespace AJE
 
         public void CalculateAfterburnerProperties()
         {
+            Tt7 = Tt6 + (Tt7_max - Tt6) * abThrottle;
+
             tau_lambda_ab = Tt7 * Cp_ab / (T0 * Cp_c);
 
-            f_ab = tau_lambda_ab - tau_lambda * tau_t;
+            if (abThrottle > 0)
+            {
+                f_ab = tau_lambda_ab - tau_lambda * tau_t;
 
-            //Divided by the ratio of heat per unit mass and heat capacity of air - the temp ratio of the burner to the ambient
-            f_ab /= h_f / (Cp_t * T0) - tau_lambda_ab;
+                //Divided by the ratio of heat per unit mass and heat capacity of air - the temp ratio of the burner to the ambient
+                f_ab /= h_f / (Cp_t * T0) - tau_lambda_ab;
 
-            f_ab *= (1 + f);
+                f_ab *= (1 + f);
+            }
+            else
+                f_ab = 0;
         }
 
         public void CalculateSuctionAreaForMassFlow()
@@ -304,7 +388,7 @@ namespace AJE
         {
             M9 = CalculateMachNumberFromAreaRatioSupersonic(a_9_rat_astar_8_actual, gamma_ab);
             A9 = A8 * a_9_rat_astar_8_actual;
-            M9f = 0.5;
+            M9f = Math.Min(0.5, M0);
         }
 
         public void CalculateExitTemperature()
