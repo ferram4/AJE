@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using UnityEngine;
+using KSP;
 
 namespace AJE
 {
@@ -97,7 +99,7 @@ namespace AJE
         private double P9f, T9f, M9f, a9f, U9f;
 
         //Fraction fuel flow for burner and afterburner respectively; used for both exit mass flow and for fuel consumption
-        private double f, f_ab;
+        private double f = 0.001, f_ab = 0;
 
         //Heat of burning from fuel per unit mass
         private double h_f;
@@ -192,16 +194,11 @@ namespace AJE
             hasAB = hasReheat;
         }
 
-        public void CalculatePerformance(double pressure, double temperature, double velocity, double soundspeed, double nozzleExitFrac, double air_density,
+        public void CalculatePerformance(double pressure, double temperature, double velocity, double nozzleExitFrac, double air_density,
             double inputThrottle, double timestep, out double thrust, out double I_sp)
         {
-            P0 = pressure;
-            T0 = temperature;
-            U0 = velocity;
-            a0 = soundspeed;
-            M0 = U0 / a0;
-
-            a_9_rat_astar_8_actual = a_9_rat_astar_8_min + (a_9_rat_astar_8_max - a_9_rat_astar_8_min) * nozzleExitFrac;
+            //Hacky quick-fixes
+            omega = Math.Max(omega, omega_idle);
 
             gamma_c = CalculateGamma(T0, 0);
             gamma_t = CalculateGamma(Tt4, f);
@@ -212,15 +209,23 @@ namespace AJE
             R_c = CalculateR(T0, 0);
             R_t = CalculateR(Tt4, f);
 
+            P0 = pressure;
+            T0 = temperature;
+            U0 = velocity;
+            a0 = Math.Sqrt(gamma_c * R_c * T0);
+            M0 = U0 / a0;
+
+            a_9_rat_astar_8_actual = a_9_rat_astar_8_min + (a_9_rat_astar_8_max - a_9_rat_astar_8_min) * nozzleExitFrac;
+
             if (hasAB)
             {
                 //Set AB at 2/3 throttle
                 mainThrottle = inputThrottle * 0.67;
                 abThrottle = Math.Max(inputThrottle - mainThrottle, 0);
 
-                gamma_ab = CalculateGamma(Tt7, f_ab);
-                Cp_ab = CalculateCp(Tt7, f_ab);
-                R_ab = CalculateR(Tt7, f_ab);
+                gamma_ab = CalculateGamma(Tt7, f_ab + f);
+                Cp_ab = CalculateCp(Tt7, f_ab + f);
+                R_ab = CalculateR(Tt7, f_ab + f);
             }
             else
             {
@@ -239,6 +244,7 @@ namespace AJE
             CalculateSuctionAreaForMassFlow();
             CalculateMassFlow(air_density);
 
+            CalculateExitMachNumberAndExitArea();
             CalculateExitTemperature();
             CalculateExitPressure();
 
@@ -247,6 +253,9 @@ namespace AJE
 
             a9f = Math.Sqrt(gamma_c * R_c * T9f);
             U9f = M9f * a9f;
+
+            f = Math.Max(f, 0.0001);
+            mdot = Math.Max(mdot, 0.01);
 
             //Effects of velocity difference at inlet and nozzle of core
             thrust = ((1 + f + f_ab) * U9 - U0);
@@ -265,7 +274,7 @@ namespace AJE
             I_sp = thrust / I_sp;
         }
 
-        public void CalculateRamProperties()
+        private void CalculateRamProperties()
         {
             //Uses isentropic compressible flow to calculate temp rise due to ram effects
             tau_r = gamma_c - 1;
@@ -280,10 +289,26 @@ namespace AJE
             pi_r = Math.Pow(tau_r, tmp);
         }
 
-        public void CalculateCompressorAndFanPropertiesFromTurbineEnergyBalance(double timestep)
+        private void CalculateTurbinePropertiesFromNozzleMassBalancing()
+        {
+            //Mass flow balance on engine nozzle throat and turbine inlet, both choked
+            tau_t = 2 * (gamma_t - 1);
+            tau_t /= (gamma_t + 1);
+            tau_t = Math.Pow(astar_4_rat_astar_8, tau_t);
+
+            //Set temperature before ab for next frame to handle ab throttling
+            Tt6 = T0 * tau_lambda * tau_t;
+
+            pi_t = gamma_t - 1;
+            pi_t *= eta_t;
+            pi_t = gamma_t / pi_t;
+            pi_t = Math.Pow(tau_t, pi_t);
+        }
+
+        private void CalculateCompressorAndFanPropertiesFromTurbineEnergyBalance(double timestep)
         {
             //The heat added by the compressor is directly proportional to its rotation speed; we calculate how this affects engine rotation later on
-            double tau_compAndFan = tau_c = omega / omega_peak * tau_c_max;
+            double tau_compAndFan = tau_c = omega / omega_peak * (tau_c_max - 1) + 1;
 
             tau_c /= (bypassRatio + 1);     //This divides the energy amoung the compressor and the fan; it is assumed the work they do is proportional
             tau_fc = tau_c * bypassRatio;
@@ -311,9 +336,10 @@ namespace AJE
             angularAcceleration *= mdot * T0;                                               //Angular acceleration of rotational elements due to energy imbalance between compressor and turbine
 
             omega += angularAcceleration * timestep;            //update angular velocity
+
         }
 
-        public void CalculateBurnerProperties()
+        private void CalculateBurnerProperties()
         {
             Tt4 = Tt3 + (Tt4_max - Tt3) * mainThrottle;
 
@@ -326,23 +352,7 @@ namespace AJE
             f /= h_f / (Cp_c * T0) - tau_lambda;
         }
 
-        public void CalculateTurbinePropertiesFromNozzleMassBalancing()
-        {
-            //Mass flow balance on engine nozzle throat and turbine inlet, both choked
-            tau_t = 2 * (gamma_t - 1);
-            tau_t /= (gamma_t + 1);
-            tau_t = Math.Pow(astar_4_rat_astar_8, tau_t);
-
-            //Set temperature before ab for next frame to handle ab throttling
-            Tt6 = T0 * tau_lambda * tau_t;
-
-            pi_t = gamma_t - 1;
-            pi_t *= eta_t;
-            pi_t = gamma_t / pi_t;
-            pi_t = Math.Pow(tau_t, pi_t);
-        }
-
-        public void CalculateAfterburnerProperties()
+        private void CalculateAfterburnerProperties()
         {
             Tt7 = Tt6 + (Tt7_max - Tt6) * abThrottle;
 
@@ -361,19 +371,19 @@ namespace AJE
                 f_ab = 0;
         }
 
-        public void CalculateSuctionAreaForMassFlow()
+        private void CalculateSuctionAreaForMassFlow()
         {
             CalculateCompressorLineFromCompressorTurbineMassBalance();
 
             A0 = A2 * astar_2_rat_a_2 / CalculateAreaRatioFromMachNumber(M0, gamma_c);
         }
 
-        public void CalculateMassFlow(double air_density)
+        private void CalculateMassFlow(double air_density)
         {
             mdot = A0 * U0 * air_density;
         }
 
-        public void CalculateCompressorLineFromCompressorTurbineMassBalance()
+        private void CalculateCompressorLineFromCompressorTurbineMassBalance()
         {
             astar_2_rat_a_2 = 1 - tau_t;
             astar_2_rat_a_2 /= (1 + f);
@@ -384,14 +394,14 @@ namespace AJE
             astar_2_rat_a_2 *= a_2_rat_astar_4;
         }
 
-        public void CalculateExitMachNumberAndExitArea()
+        private void CalculateExitMachNumberAndExitArea()
         {
             M9 = CalculateMachNumberFromAreaRatioSupersonic(a_9_rat_astar_8_actual, gamma_ab);
             A9 = A8 * a_9_rat_astar_8_actual;
             M9f = Math.Min(0.5, M0);
         }
 
-        public void CalculateExitTemperature()
+        private void CalculateExitTemperature()
         {
             //total temperature at exit of the core
             double Tt9 = T0 * tau_lambda_ab * Cp_c / Cp_ab;
@@ -409,7 +419,7 @@ namespace AJE
             T9f = Tt9 / T9f;
         }
 
-        public void CalculateExitPressure()
+        private void CalculateExitPressure()
         {
             //total pressure at exit of the core
             double Pt9 = T0 * pi_r * pi_c * pi_b * pi_t * pi_ab * pi_n;
@@ -429,23 +439,23 @@ namespace AJE
             P9f = Pt9 / P9f;
         }
 
-        public double CalculateGamma(double temperature, double fuel_fraction)
+        private double CalculateGamma(double temperature, double fuel_fraction)
         {
             return 1.4;
         }
 
-        public double CalculateCp(double temperature, double fuel_fraction)
+        private double CalculateCp(double temperature, double fuel_fraction)
         {
             return 1004;
         }
 
-        public double CalculateR(double temperature, double fuel_fraction)
+        private double CalculateR(double temperature, double fuel_fraction)
         {
             return 287;
         }
 
         //Calculates the area ratio necessary for sonic flow directly from mach number
-        public double CalculateAreaRatioFromMachNumber(double mach, double gamma)
+        private double CalculateAreaRatioFromMachNumber(double mach, double gamma)
         {
             double gammaPower = gamma - 1;
             gammaPower *= 2;
@@ -454,7 +464,7 @@ namespace AJE
             return CalculateAreaRatioFromMachNumber(mach, gamma, gammaPower);
         }
 
-        public double CalculateAreaRatioFromMachNumber(double mach, double gamma, double gammaPower)
+        private double CalculateAreaRatioFromMachNumber(double mach, double gamma, double gammaPower)
         {
             double result = gamma - 1;
             result *= 0.5;
@@ -470,55 +480,50 @@ namespace AJE
             return result;
         }
 
-        public double CalculateMachNumberFromAreaRatioSupersonic(double areaRatio, double gamma)
+        private double CalculateMachNumberFromAreaRatioSupersonic(double areaRatio, double gamma)
         {
-            return CalculateMachNumberFromAreaRatio(areaRatio, gamma, 2);
+            return CalculateMachNumberFromAreaRatio(areaRatio, gamma, 2, true);
         }
 
 
-        public double CalculateMachNumberFromAreaRatio(double areaRatio, double gamma, double guess)
+        private double CalculateMachNumberFromAreaRatio(double areaRatio, double gamma, double guess, bool supersonic)
         {
-            double numeratorConstant = 1 - 3 * gamma;
-            numeratorConstant /= (2 - 2 * gamma);
-            numeratorConstant = Math.Pow(2, numeratorConstant);
 
-            double gammaPower = gamma - 1;
-            gammaPower *= 2;
-            gammaPower = (gamma + 1) / gammaPower;
+            double P = 2 / (gamma + 1);
+            double Q = 1 - P;
+            double R;
+            if (supersonic)
+            {
+                R = Math.Pow(areaRatio, 2 * Q / P);
+            }
+            else
+                R = areaRatio * areaRatio;
 
-            double mach_last = 0;
-            double fn = 1;
-            double fn_prime = 1;
+            double last_guess = 0;
+
+            guess *= guess;
 
             int iter = 0;
-            while(Math.Abs(guess - mach_last) <= 0.01 || iter > 50)
+            while (Math.Abs(guess - last_guess) <= 0.01 && iter < 50)
             {
-                mach_last = guess;
-                fn = CalculateAreaRatioFromMachNumber(guess, gamma, gammaPower);
+                last_guess = guess;
+                double new_guess = guess * Q + P;
+                new_guess = Math.Pow(new_guess, -P / Q);
+                new_guess = 1 - R * new_guess;
+                new_guess = P * (guess - 1) / new_guess;
 
-                fn_prime = gamma - 1;
-                fn_prime *= guess * guess;
-                fn_prime += 2;
-                fn_prime *= guess * guess;
-
-                fn_prime = gammaPower / fn_prime;
-                fn_prime *= (guess * guess - 1);
-
-                double tmp = guess * guess * 0.5 * (gamma - 1);
-                tmp++;
-                tmp /= (gamma + 1);
-
-                fn_prime *= Math.Pow(tmp, gammaPower);
-
-                guess = guess - fn / fn_prime;
+                guess = new_guess;
             }
+            guess = Math.Sqrt(guess);
+
+            //Debug.Log(guess);
 
             return guess;
         }
 
-        public double CalculateMachNumberFromAreaRatioSubsonic(double areaRatio, double gamma)
+        private double CalculateMachNumberFromAreaRatioSubsonic(double areaRatio, double gamma)
         {
-            return CalculateMachNumberFromAreaRatio(areaRatio, gamma, 0.5);
+            return CalculateMachNumberFromAreaRatio(areaRatio, gamma, 0.5, false);
         }
     }
 }
