@@ -405,7 +405,9 @@ namespace AJE
             double mach_last = 0;
             double fn = 1;
             double fn_prime = 1;
-            while(Math.Abs(guess - mach_last) <= 0.01)
+
+            int iter = 0;
+            while(Math.Abs(guess - mach_last) <= 0.01 || iter > 50)
             {
                 mach_last = guess;
                 fn = CalculateAreaRatioFromMachNumber(guess, gamma, gammaPower);
