@@ -55,7 +55,6 @@ namespace AJE
                 return;
             FloatCurve resultcurve = new FloatCurve();
             this.realIsp = isp;
-            isp = isp * IspMultiplier;
             resultcurve.Add(0, isp);
             resultcurve.Add(1, isp); 
             
@@ -76,7 +75,7 @@ namespace AJE
 
         public void SetThrust(float power)
         {
-            if (power > 0)
+            /*if (power > 0)
             {
                 this.maxThrust = Mathf.Min(power, ThrustUpperLimit);
             }
@@ -84,7 +83,9 @@ namespace AJE
             {
                 this.maxThrust = 0.0001f;
             }
-            this.minThrust = this.maxThrust * idle;
+            this.minThrust = this.maxThrust * idle;*/
+            this.maxThrust = power;
+            this.minThrust = power;
         }
 
         public float maxThrust

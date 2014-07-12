@@ -135,7 +135,7 @@ namespace AJE
         private double abThrottle = 0;
 
         //The current rotational velocity of the engine
-        private double omega = 0;
+        private double omega = 1;
 
         //The peak and idling (zero throttle) rotational velocities of the rotating elements; used to handle spooling up / down
         private double omega_peak = 0;
@@ -165,22 +165,36 @@ namespace AJE
         public void InitializeComponentEfficiencies(double diffuserPresRatio, double compressorEfficiency, double maxCompressorPressureRatio, double fanEfficiency, double maxFanPressureRatio, double burnerPresRatio, double turbineEfficiency, double nozzlePresRatio)
         {
             pi_d = diffuserPresRatio;
+
             eta_c = compressorEfficiency;
             pi_c_max = maxCompressorPressureRatio;
 
-            tau_c_max = gamma_c - 1;
+            tau_c_max = 1.4 - 1;
             tau_c_max *= eta_c;
-            tau_c_max /= gamma_c;
+            tau_c_max /= 1.4;
             tau_c_max = Math.Pow(pi_c_max, tau_c_max);
+
+            tau_c = 1;
+            pi_c = 1;
 
             eta_fc = fanEfficiency;
             pi_fc_max = maxFanPressureRatio;
+
+            tau_fc = 1;
+            pi_fc = 1;
+
             pi_b = burnerPresRatio;
+
             eta_t = turbineEfficiency;
+            tau_t = 1;
+            pi_t = 1;
+
             pi_n = nozzlePresRatio;
             tau_d = 1;
             tau_n = 1;
             pi_ab = 1;
+            pi_d = 1;
+            pi_b = 1;
         }
 
         //Must be called after InitializeComponentEfficiencies
@@ -192,13 +206,15 @@ namespace AJE
             Tt6 = 300;
             h_f = heatPerUnitMassFuel;
             hasAB = hasReheat;
+
+            tau_lambda = tau_lambda_ab = 1;
         }
 
         public void CalculatePerformance(double pressure, double temperature, double velocity, double nozzleExitFrac, double air_density,
             double inputThrottle, double timestep, out double thrust, out double I_sp)
         {
-            //Hacky quick-fixes
-            omega = Math.Max(omega, omega_idle);
+            //Hacky quick-fix
+            omega = Math.Max(omega, 15000);
 
             gamma_c = CalculateGamma(T0, 0);
             gamma_t = CalculateGamma(Tt4, f);
@@ -209,7 +225,7 @@ namespace AJE
             R_c = CalculateR(T0, 0);
             R_t = CalculateR(Tt4, f);
 
-            P0 = pressure;
+            P0 = pressure * 101300;     //convert atm to Pa
             T0 = temperature;
             U0 = velocity;
             a0 = Math.Sqrt(gamma_c * R_c * T0);
@@ -220,8 +236,8 @@ namespace AJE
             if (hasAB)
             {
                 //Set AB at 2/3 throttle
-                mainThrottle = inputThrottle * 0.67;
-                abThrottle = Math.Max(inputThrottle - mainThrottle, 0);
+                mainThrottle = Math.Min(inputThrottle * 1.5, 1);
+                abThrottle = Math.Max(inputThrottle - 0.67, 0);
 
                 gamma_ab = CalculateGamma(Tt7, f_ab + f);
                 Cp_ab = CalculateCp(Tt7, f_ab + f);
@@ -251,8 +267,11 @@ namespace AJE
             a9 = Math.Sqrt(gamma_ab * R_ab * T9);
             U9 = M9 * a9;
 
-            a9f = Math.Sqrt(gamma_c * R_c * T9f);
-            U9f = M9f * a9f;
+            if (bypassRatio > 0)
+            {
+                a9f = Math.Sqrt(gamma_c * R_c * T9f);
+                U9f = M9f * a9f;
+            }
 
             f = Math.Max(f, 0.0001);
             mdot = Math.Max(mdot, 0.01);
@@ -260,18 +279,75 @@ namespace AJE
             //Effects of velocity difference at inlet and nozzle of core
             thrust = ((1 + f + f_ab) * U9 - U0);
 
-            //Effects of velocity difference across fan
-            thrust += (U9f - U0) * bypassRatio;
+            if (bypassRatio > 0)
+            {
+                //Effects of velocity difference across fan
+                thrust += (U9f - U0) * bypassRatio;
+            }
             thrust *= mdot;
 
             //Effects of pressure difference at inlet and nozzle of core
             thrust += (P9 - P0) * A9;
 
-            //Effects of pressure difference across fan
-            thrust += (P9f - P0) * A9 * bypassRatio;
+            if (bypassRatio > 0)
+            {
+                //Effects of pressure difference across fan
+                thrust += (P9f - P0) * A9 * bypassRatio;
+            }
 
             I_sp = mdot * (f + f_ab) * g_0;
             I_sp = thrust / I_sp;
+
+            I_sp = Math.Max(I_sp, 0);
+
+            thrust *= 0.001;    //Must convert to kN
+
+            string debugString = "Freestream Conditions\n\r";
+            debugString += "P0: " + P0 + " T0: " + T0 + "\n\r";
+            debugString += "a0: " + a0 + " M0: " + M0 + "\n\r";
+            debugString += "A0: " + A0 + " U0: " + U0 + "\n\r";
+
+            debugString += "\n\r\n\r";
+            debugString += "Nozzle Conditions\n\r";
+            debugString += "P9: " + P9 + " T9: " + T9 + "\n\r";
+            debugString += "a9: " + a9 + " M9: " + M9 + "\n\r";
+            debugString += "A9: " + A9 + " U9: " + U9 + "\n\r";
+
+            debugString += "\n\r\n\r";
+            debugString += "Engine Conditions\n\r";
+            debugString += "Pi_r: " + pi_r + " Tau_r: " + tau_r + "\n\r";
+            debugString += "Pi_d: " + pi_d + " Tau_d: " + tau_d + "\n\r";
+
+            debugString += "\n\r";
+
+            debugString += "Pi_c: " + pi_c + " Tau_c: " + tau_c + "\n\r";
+            debugString += "Pi_c_max: " + pi_c_max + " Tau_c_max: " + tau_c_max + "\n\r";
+
+            debugString += "\n\r";
+
+            debugString += "Pi_b: " + pi_b + " Tau_b: " + tau_b + "\n\r";
+            debugString += "Tau_lambda: " + tau_lambda + "\n\r";
+
+            debugString += "\n\r";
+
+            debugString += "Pi_t: " + pi_t + " Tau_t: " + tau_t + "\n\r";
+
+            debugString += "\n\r";
+
+            debugString += "Pi_ab: " + pi_ab + " Tau_ab: " + tau_ab + "\n\r";
+            debugString += "Tau_lambda_ab: " + tau_lambda_ab + "\n\r";
+
+            debugString += "\n\r";
+
+            debugString += "Pi_n: " + pi_n + " Tau_n: " + tau_n + "\n\r";
+
+            debugString += "\n\r\n\r";
+            debugString += "Engine Status\n\r";
+            debugString += "omega: " + omega + " mdot: " + mdot + "\n\r";
+            debugString += "thrust: " + thrust + " I_sp: " + I_sp + "\n\r";
+
+
+            Debug.Log(debugString);
         }
 
         private void CalculateRamProperties()
@@ -308,13 +384,17 @@ namespace AJE
         private void CalculateCompressorAndFanPropertiesFromTurbineEnergyBalance(double timestep)
         {
             //The heat added by the compressor is directly proportional to its rotation speed; we calculate how this affects engine rotation later on
-            double tau_compAndFan = tau_c = omega / omega_peak * (tau_c_max - 1) + 1;
+            double tau_compAndFan = tau_c = omega / omega_peak * (tau_c_max - 1);
 
-            tau_c /= (bypassRatio + 1);     //This divides the energy amoung the compressor and the fan; it is assumed the work they do is proportional
-            tau_fc = tau_c * bypassRatio;
+            tau_compAndFan++;
+            if (bypassRatio > 0)
+            {
 
+                tau_c /= (bypassRatio + 1);     //This divides the energy amoung the compressor and the fan; it is assumed the work they do is proportional
+                tau_fc = tau_c * bypassRatio;
+                tau_fc++;
+            }
             tau_c++;
-            tau_fc++;
 
             //Set temperature at compressor exit for next frame to handle burner throttling
             Tt3 = T0 * tau_c * tau_r;
@@ -324,16 +404,20 @@ namespace AJE
             pi_c = gamma_c / pi_c;
             pi_c = Math.Pow(tau_c, pi_c);
 
-            pi_fc *= eta_fc;
-            pi_fc = gamma_c / pi_fc;
-            pi_fc = Math.Pow(tau_fc, pi_fc);
+            if (bypassRatio > 0)
+            {
+                pi_fc *= eta_fc;
+                pi_fc = gamma_c / pi_fc;
+                pi_fc = Math.Pow(tau_fc, pi_fc);
+            }
 
             //Calculate changes in engine RPM due to differences in work done by compressor / produced by turbine
 
-            double angularAcceleration = (1 + f) * Cp_t * tau_lambda * (tau_t - 1);         //Work produced by turbine
-            angularAcceleration -= Cp_c * tau_r * (tau_compAndFan - 1);                     //Work used by compressor
+            double angularAcceleration = (1 + f) * Cp_t * tau_lambda * (tau_t - 1);         //Power produced by turbine
+            angularAcceleration -= Cp_c * tau_r * (tau_compAndFan - 1);                     //Power used by compressor
             angularAcceleration /= I * omega;
             angularAcceleration *= mdot * T0;                                               //Angular acceleration of rotational elements due to energy imbalance between compressor and turbine
+            //angularAcceleration -= 0.001;                                                   //Friction losses inside the engine
 
             omega += angularAcceleration * timestep;            //update angular velocity
 
@@ -344,6 +428,8 @@ namespace AJE
             Tt4 = Tt3 + (Tt4_max - Tt3) * mainThrottle;
 
             tau_lambda = Tt4 * Cp_t / (T0 * Cp_c);
+
+            tau_b = tau_lambda / (tau_c * tau_r);
 
             //Fuel usage is equal to the temperature added by the burner minus the temp added from ram and compression
             f = tau_lambda - tau_r * tau_c;
@@ -357,6 +443,8 @@ namespace AJE
             Tt7 = Tt6 + (Tt7_max - Tt6) * abThrottle;
 
             tau_lambda_ab = Tt7 * Cp_ab / (T0 * Cp_c);
+
+            tau_ab = tau_lambda_ab / (tau_lambda * tau_t);
 
             if (abThrottle > 0)
             {
@@ -375,7 +463,7 @@ namespace AJE
         {
             CalculateCompressorLineFromCompressorTurbineMassBalance();
 
-            A0 = A2 * astar_2_rat_a_2 / CalculateAreaRatioFromMachNumber(M0, gamma_c);
+            A0 = A2 * astar_2_rat_a_2 * CalculateAreaRatioFromMachNumber(M0, gamma_c);
         }
 
         private void CalculateMassFlow(double air_density)
@@ -411,18 +499,21 @@ namespace AJE
             T9++;
             T9 = Tt9 / T9;
 
-            //total temp at exit of the fan
-            Tt9 = T0 * tau_fc;
-            T9f = M9f * M9f;
-            T9f *= (gamma_c - 1) * 0.5;
-            T9f++;
-            T9f = Tt9 / T9f;
+            if (bypassRatio > 0)
+            {
+                //total temp at exit of the fan
+                Tt9 = T0 * tau_fc;
+                T9f = M9f * M9f;
+                T9f *= (gamma_c - 1) * 0.5;
+                T9f++;
+                T9f = Tt9 / T9f;
+            }
         }
 
         private void CalculateExitPressure()
         {
             //total pressure at exit of the core
-            double Pt9 = T0 * pi_r * pi_c * pi_b * pi_t * pi_ab * pi_n;
+            double Pt9 = P0 * pi_r * pi_c * pi_b * pi_t * pi_ab * pi_n;
 
             P9 = M9 * M9;
             P9 *= (gamma_ab - 1) * 0.5;
@@ -430,13 +521,17 @@ namespace AJE
             P9 = Math.Pow(P9, gamma_ab / (gamma_ab - 1));
             P9 = Pt9 / P9;
 
-            //total pressure at exit of fan
-            Pt9 = T0 * pi_r * pi_fc;
-            P9f = M9f * M9f;
-            P9f *= (gamma_c - 1) * 0.5;
-            P9f++;
-            P9f = Math.Pow(P9f, gamma_c / (gamma_c - 1));
-            P9f = Pt9 / P9f;
+
+            if (bypassRatio > 0)
+            {
+                //total pressure at exit of fan
+                Pt9 = T0 * pi_r * pi_fc;
+                P9f = M9f * M9f;
+                P9f *= (gamma_c - 1) * 0.5;
+                P9f++;
+                P9f = Math.Pow(P9f, gamma_c / (gamma_c - 1));
+                P9f = Pt9 / P9f;
+            }
         }
 
         private double CalculateGamma(double temperature, double fuel_fraction)
@@ -504,7 +599,7 @@ namespace AJE
             guess *= guess;
 
             int iter = 0;
-            while (Math.Abs(guess - last_guess) <= 0.01 && iter < 50)
+            while (Math.Abs(guess - last_guess) >= 0.01 && iter < 50)
             {
                 last_guess = guess;
                 double new_guess = guess * Q + P;
