@@ -127,7 +127,7 @@ namespace AJE
             if (vessel == null)
                 return;
             engine = new EngineWrapper(part);
-            //engine.useVelocityCurve = false;
+            engine.useVelocityCurve = false;
             //engine.IspMultiplier = IspMultiplier;
             //engine.idle = idle;
             //engine.ThrustUpperLimit = maxThrust;
@@ -140,7 +140,7 @@ namespace AJE
 
             useAB = abflag > 0;
 
-            aje.InitializeEngineGeometry(acore, acore * 0.25, acore * 0.35, acore * 0.6, acore * 1.2, byprat, 8000, 0.5, 3000);
+            aje.InitializeEngineGeometry(acore, acore * 0.209, acore * 0.35, acore * 0.4, acore * 0.7, byprat, 8000, 0.5, 3000);
             aje.InitializeComponentEfficiencies(1, 1, prat3, 1, prat13, prat4, 1, 1);
             aje.InitializeFuelProperties(tt7, tt4, 4.3e7, useAB);
 
@@ -234,6 +234,8 @@ namespace AJE
                     Mode = "Afterburner " + System.Convert.ToString((int)((OverallThrottle - ABthreshold) / (1 - ABthreshold) * 100f)) + "%";
 
             }
+
+            engine.currentThrottle = 1;
             Mode += " (" + (thrust).ToString("N2") + "kN gr)";
 
 

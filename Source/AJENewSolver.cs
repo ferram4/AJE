@@ -156,7 +156,7 @@ namespace AJE
             A2 = compressorInletArea;
             bypassRatio = bypass;
 
-            omega_peak = peakRPM * 30 / Math.PI;  //convert RPM to rad/s
+            omega_peak = peakRPM * Math.PI / 30;  //convert RPM to rad/s
             omega_idle = omega_peak * idlingFraction;
             I = rotInertia;
         }
@@ -214,7 +214,7 @@ namespace AJE
             double inputThrottle, double timestep, out double thrust, out double I_sp)
         {
             //Hacky quick-fix
-            omega = Math.Max(omega, 15000);
+            omega = Math.Max(omega, 1);
 
             gamma_c = CalculateGamma(T0, 0);
             gamma_t = CalculateGamma(Tt4, f);
@@ -368,6 +368,18 @@ namespace AJE
         private void CalculateTurbinePropertiesFromNozzleMassBalancing()
         {
             //Mass flow balance on engine nozzle throat and turbine inlet, both choked
+            /*tau_t = pi_ab * (1 + f_ab);
+            tau_t = Math.Sqrt(tau_ab) / tau_t;
+            tau_t *= astar_4_rat_astar_8;
+
+            double tmp = gamma_t - 1;
+            tmp *= eta_t;
+            tmp *= 2;
+            tmp -= gamma_t;
+            tmp = 2 * gamma_t / tmp;
+
+            tau_t = Math.Pow(tau_t, tmp);*/
+
             tau_t = 2 * (gamma_t - 1);
             tau_t /= (gamma_t + 1);
             tau_t = Math.Pow(astar_4_rat_astar_8, tau_t);
@@ -413,11 +425,11 @@ namespace AJE
 
             //Calculate changes in engine RPM due to differences in work done by compressor / produced by turbine
 
-            double angularAcceleration = (1 + f) * Cp_t * tau_lambda * (tau_t - 1);         //Power produced by turbine
+            double angularAcceleration = (1 + f) * Cp_t * tau_lambda * (1 - tau_t);         //Power produced by turbine
             angularAcceleration -= Cp_c * tau_r * (tau_compAndFan - 1);                     //Power used by compressor
             angularAcceleration /= I * omega;
             angularAcceleration *= mdot * T0;                                               //Angular acceleration of rotational elements due to energy imbalance between compressor and turbine
-            //angularAcceleration -= 0.001;                                                   //Friction losses inside the engine
+            angularAcceleration -= 0.01;                                                   //Friction losses inside the engine
 
             omega += angularAcceleration * timestep;            //update angular velocity
 
@@ -479,7 +491,7 @@ namespace AJE
 
             astar_2_rat_a_2 /= Math.Sqrt(tau_c - 1);
             astar_2_rat_a_2 *= pi_c;
-            astar_2_rat_a_2 *= a_2_rat_astar_4;
+            astar_2_rat_a_2 /= a_2_rat_astar_4;
         }
 
         private void CalculateExitMachNumberAndExitArea()
