@@ -26,6 +26,7 @@
     <Compile Include="AJERotor.cs" />
     <Compile Include="AJEInlet.cs" />
     <Compile Include="AJESolver.cs" />
+    <Compile Include="AJETransientGasGeneratorModel.cs" />
     <Compile Include="EngineWrapper.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

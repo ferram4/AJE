@@ -10,7 +10,7 @@ namespace AJE
 
     public class AJEModule : PartModule
     {
-        public AJENewSolver aje;
+        public AJETransientGasGeneratorModel aje;
 
         [KSPField(isPersistant = false, guiActive = false)]
         public float IspMultiplier = 1f;
@@ -134,15 +134,27 @@ namespace AJE
             engine.useEngineResponseTime = false;
             part.maxTemp = 3600f;
             engine.heatProduction = 360f;
-            aje = new AJENewSolver();
+            aje = new AJETransientGasGeneratorModel();
 
             acore *= 0.092903f;
 
             useAB = abflag > 0;
+            if (eta5 < 0)
+                eta5 = 0.95f;
+            if (eta3 < 0)
+                eta3 = 0.95f;
+            if (eta13 < 0)
+                eta3 = 0.95f;
 
-            aje.InitializeEngineGeometry(acore, acore * 0.209, acore * 0.35, acore * 0.4, acore * 0.7, byprat, 8000, 0.5, 3000);
-            aje.InitializeComponentEfficiencies(1, 1, prat3, 1, prat13, prat4, 1, 1);
-            aje.InitializeFuelProperties(tt7, tt4, 4.3e7, useAB);
+            aje.InitializeOverallEngineData(acore, acore * 0.1, acore * 0.9, acore * 0.1 * 0.3, 4.3e7, tt4, tt7);
+            aje.AddNewSpool(prat3, 288, eta3, acore * 1.5, tt4, eta5, acore * 0.3, 7685, 5000, 0.99, 0.95, 101300, 288, 3000, 77);
+
+
+
+
+            /*aje.InitializeEngineGeometry(acore, acore * 0.2, acore * 0.9, acore * 0.9, acore * 1.2, byprat, 8000, 0.5, 3000);
+            aje.InitializeComponentEfficiencies(1, eta3, prat3, eta13, prat13, prat4, eta5, 1);
+            aje.InitializeFuelProperties(tt4, tt7, 4.3e7, useAB);*/
 
             /*if (part.partInfo.partPrefab.Modules.Contains("AJEModule"))
             {
@@ -167,7 +179,10 @@ namespace AJE
             if (HighLogic.LoadedSceneIsEditor)
                 return;
             if (engine.type == EngineWrapper.EngineType.NONE || !engine.EngineIgnited)
+            {
+                aje.started = false;
                 return;
+            }
             if (vessel.mainBody.atmosphereContainsOxygen == false || part.vessel.altitude > vessel.mainBody.maxAtmosphereAltitude)
             {
                 engine.SetThrust(0);
@@ -206,25 +221,41 @@ namespace AJE
 
             #endregion
 
-            double pressure = FlightGlobals.getStaticPressure(vessel.altitude, vessel.mainBody);
+            double pressure = FlightGlobals.getStaticPressure(vessel.altitude, vessel.mainBody) * 101300;
             double temperature = FlightGlobals.getExternalTemperature((float)vessel.altitude, vessel.mainBody) + 273.15;
+            //double density = FlightGlobals.getAtmDensity(pressure);
+            double velocity = part.vessel.srfSpeed;
+
+            if (!aje.started)
+                aje.StartupFunction(pressure, temperature, velocity);
+
             /*if (usePrat3Curve)
             {
                 aje.prat[3] = aje.p3p2d = (double)(prat3Curve.Evaluate((float)aje.fsmach));
             }*/
+            int stepsPerTimestep = 4;
+            float timeStep = TimeWarp.fixedDeltaTime / stepsPerTimestep;
             double thrust, I_sp;
             thrust = I_sp = 0;
             OverallThrottle = vessel.ctrlState.mainThrottle;
             if (!useAB)
             {
-                aje.CalculatePerformance(pressure, temperature, part.vessel.srfSpeed, OverallThrottle, 1.2 * pressure, OverallThrottle, TimeWarp.fixedDeltaTime, out thrust, out I_sp);
+                for (int j = 0; j < stepsPerTimestep; j++)
+                    aje.CalculatePerformance(pressure, temperature, velocity, timeStep, OverallThrottle);
+                thrust = aje.GetThrust();
+                I_sp = aje.GetIsp();
+                //aje.CalculatePerformance(pressure, temperature, part.vessel.srfSpeed, OverallThrottle, density, OverallThrottle, TimeWarp.fixedDeltaTime, out thrust, out I_sp);
                 engine.SetThrust((float)thrust);
                 engine.SetIsp((float)I_sp);
                 Mode = "Cruise " + System.Convert.ToString((int)(OverallThrottle * 100f)) + "%";
             }
             else
             {
-                aje.CalculatePerformance(pressure, temperature, part.vessel.srfSpeed, OverallThrottle, 1.2 * pressure, OverallThrottle, TimeWarp.fixedDeltaTime, out thrust, out I_sp);
+                for (int j = 0; j < stepsPerTimestep; j++)
+                    aje.CalculatePerformance(pressure, temperature, velocity, timeStep, OverallThrottle);
+                thrust = aje.GetThrust();
+                I_sp = aje.GetIsp();
+                //aje.CalculatePerformance(pressure, temperature, part.vessel.srfSpeed, OverallThrottle, density, OverallThrottle, TimeWarp.fixedDeltaTime, out thrust, out I_sp);
                 engine.SetThrust((float)thrust);
                 engine.SetIsp((float)I_sp);
 
